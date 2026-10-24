@@ -272,7 +272,7 @@ body:has(#timer.active) .hero .progress,body:has(#timer.active) .hero>.muted,bod
           <div class="game-stat"><span class="muted">오늘 적립</span><strong id="gameEarnedToday">0분</strong></div>
           <div class="game-stat"><span class="muted">오늘 사용</span><strong id="gameSpentToday">0분</strong></div>
         </div>
-        <div class="btnrow"><button type="button" class="btn secondary" id="spendGameTime" onclick="return window.__startGameTimer ? window.__startGameTimer(event) : (alert('게임 타이머를 불러오지 못했어요. 페이지를 새로고침해 주세요.'), false)">🎮 게임시간 사용</button><button type="button" class="btn js-request-approval">🙋 승인요청하기</button></div>
+        <div class="btnrow"><button type="button" class="btn secondary" id="spendGameTime" onclick="return window.__startGameTimer ? window.__startGameTimer(event) : (alert('게임 타이머를 불러오지 못했어요. 페이지를 새로고침해 주세요.'), false)">🎮 게임시간 사용</button><button type="button" class="btn secondary" id="directGameSpend">⏱ 시간 입력해서 차감</button><button type="button" class="btn js-request-approval">🙋 승인요청하기</button></div>
         <div class="card" id="gameTimerCard" style="margin-top:12px;background:var(--soft, #f6f7fb)">
           <div class="muted" id="gameTimerStatus">게임시간을 사용하면 타이머가 시작돼요.</div>
           <div id="gameTimerClock" style="font-size:clamp(2rem,8vw,3rem);font-weight:800;font-variant-numeric:tabular-nums;text-align:center;margin:8px 0">00:00</div>
@@ -698,14 +698,22 @@ renderTimer();
     ['gameStart','🎮 게임 타이머 시작'],
     ['gameAlert','⏰ 게임 10분 전 · 시간 소진'],
     ['gameStop','■ 게임 타이머 종료'],
+    ['gameUse','⏱ 게임시간 바로 차감'],
     ['reward','🎁 500XP 보상 달성']
   ];
   const URL_RE=/^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+$/;
   function getUrl(){try{return localStorage.getItem(URL_KEY)||''}catch(e){return ''}}
   function getOpts(){let o={};try{o=JSON.parse(localStorage.getItem(OPT_KEY)||'{}')||{}}catch(e){}EVENTS.forEach(([k])=>{if(o[k]===undefined)o[k]=true});return o}
-  function post(url,text){
-    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
-      body:JSON.stringify({username:'공부대장 잼민이',content:text,allowed_mentions:{parse:[]}})});
+  async function post(url,text){
+    const payload={username:'공부대장 잼민이',content:text,allowed_mentions:{parse:[]}};
+    try{
+      return await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    }catch(e){
+      /* 브라우저가 응답을 막는 경우를 대비한 예비 전송 (전송은 되지만 결과 확인은 못 해요) */
+      const fd=new FormData();fd.append('payload_json',JSON.stringify(payload));
+      await fetch(url,{method:'POST',mode:'no-cors',body:fd});
+      return {ok:true,status:0,opaque:true};
+    }
   }
   function send(evt,text){
     try{
@@ -795,16 +803,48 @@ renderTimer();
   function requestApproval(){
     try{
       const list=timerData.records.filter(r=>r.approved===false);
-      if(!list.length){toast('승인 요청할 공부 기록이 없어요.');return}
+      if(!list.length){alert('승인 대기 중인 공부 기록이 없어요.\n공부 타이머를 종료해서 기록을 저장한 뒤에 눌러 주세요.');return}
       const url=getUrl();
-      if(!URL_RE.test(url)){toast('디스코드 알림이 아직 설정되지 않았어요. 더보기 → 🔔 디스코드 알림에서 설정해 주세요.');return}
+      if(!URL_RE.test(url)){alert('디스코드 알림이 아직 설정되지 않았어요.\n더보기 → 🔔 디스코드 알림에서 웹훅 주소를 저장해 주세요.');return}
       const total=list.reduce((n,r)=>n+(Number(r.seconds)||0),0);
       const lines=list.slice(0,10).map(r=>`• ${r.date} ${r.subject} ${durationText(r.seconds)}${r.note?' ('+r.note+')':''}`);
       const text='🙋 승인 요청이 왔어요!\n공부 기록 '+list.length+'건 · 총 '+durationText(total)+'\n'+lines.join('\n')+(list.length>10?'\n…외 '+(list.length-10)+'건':'')+'\n👉 앱 → 🎮 게임하기 탭 → 공부 기록 수정에서 [적립 승인]을 눌러 주세요.';
-      post(url,text).then(r=>toast(r.ok?'승인 요청을 보냈어요! 🙋':'전송에 실패했어요. 다시 시도해 주세요.')).catch(()=>toast('전송하지 못했어요. 인터넷 연결을 확인해 주세요.'));
+      toast('승인 요청을 보내는 중...');
+      post(url,text).then(r=>{if(r.ok)toast('승인 요청을 보냈어요! 🙋');else alert('디스코드 전송에 실패했어요. (오류 '+r.status+')\n더보기 → 🔔 디스코드 알림에서 웹훅 주소를 확인하고 테스트 보내기를 눌러 보세요.')}).catch(()=>alert('디스코드로 보내지 못했어요. 인터넷 연결을 확인해 주세요.'));
     }catch(e){}
   }
   document.querySelectorAll('.js-request-approval').forEach(b=>b.addEventListener('click',requestApproval));
+
+  /* 게임시간 바로 차감: 타이머 없이 입력한 분만큼 한 번에 차감 */
+  function openDirectSpend(){
+    const availMin=Math.floor(gameBalanceSeconds()/60);
+    if(availMin<1){toast('사용 가능한 게임시간이 없어요.');return}
+    const d=document.createElement('dialog');
+    d.style.cssText='border:0;border-radius:18px;padding:20px;width:min(380px,calc(100% - 28px));box-shadow:0 20px 60px #0f172a55;color:#172033';
+    d.innerHTML='<h2 style="margin:0 0 6px;font-size:19px">⏱ 게임시간 바로 차감</h2>'
+      +'<p class="muted" style="margin:0 0 10px">타이머 없이 쓴 시간만큼 한 번에 차감해요. 지금 사용 가능한 시간은 <strong>'+availMin+'분</strong>이에요.</p>'
+      +'<input id="dsMin" type="number" inputmode="numeric" min="1" max="'+availMin+'" placeholder="차감할 시간(분)" style="width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:12px;font-size:20px;text-align:center">'
+      +'<div id="dsMsg" class="muted" style="min-height:20px;margin-top:6px"></div>'
+      +'<div class="btnrow"><button type="button" class="btn" id="dsOk">차감하기</button><button type="button" class="btn secondary" id="dsCancel">취소</button></div>';
+    document.body.appendChild(d);
+    const input=d.querySelector('#dsMin'),msg=d.querySelector('#dsMsg');
+    d.querySelector('#dsCancel').onclick=()=>d.close();
+    d.querySelector('#dsOk').onclick=()=>{
+      const mins=Math.floor(Number(input.value));
+      const nowAvail=Math.floor(gameBalanceSeconds()/60);
+      if(!Number.isFinite(mins)||mins<1){msg.textContent='❌ 1분 이상 입력해 주세요.';return}
+      if(mins>nowAvail){msg.textContent='❌ 사용 가능한 '+nowAvail+'분보다 많아요.';return}
+      gameSpendList().push({id:'spend-'+Date.now()+'-'+Math.random().toString(36).slice(2,7),minutes:mins,seconds:mins*60,date:isoToday(),note:'시간 입력 차감',createdAt:Date.now()});
+      save();renderGameExchange();
+      toast('게임시간 '+mins+'분을 차감했어요.');
+      send('gameUse','⏱ 게임시간 '+mins+'분 사용 (바로 차감) · 남은 시간 '+gameDurationText(Math.max(0,gameBalanceSeconds())));
+      d.close();
+    };
+    d.addEventListener('close',()=>d.remove());
+    d.showModal();
+  }
+  const directBtn=document.getElementById('directGameSpend');
+  if(directBtn)directBtn.addEventListener('click',openDirectSpend);
 
   /* 설정 화면: 더보기 메뉴에 버튼 추가 (보호자 PIN 확인 후 열림) */
   function openSettings(){
@@ -839,7 +879,7 @@ renderTimer();
       msg.textContent='보내는 중...';
       try{
         const r=await post(u,'✅ 공부대장 잼민이 알림 테스트예요. 이 메시지가 보이면 연결 성공!');
-        msg.textContent=r.ok?'✅ 보냈어요. 디스코드 채널을 확인해 보세요.':'❌ 전송 실패 ('+r.status+'). 웹훅 주소가 맞는지 확인해 주세요.';
+        msg.textContent=r.ok?(r.opaque?'✅ 전송은 했어요. 디스코드 채널에 메시지가 왔는지 확인해 주세요.':'✅ 보냈어요. 디스코드 채널을 확인해 보세요.'):'❌ 전송 실패 ('+r.status+'). 웹훅 주소가 맞는지 확인해 주세요.';
       }catch(e){msg.textContent='❌ 전송하지 못했어요. 인터넷 연결을 확인해 주세요.'}
     };
     d.querySelector('#dcClose').onclick=()=>d.close();
