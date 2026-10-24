@@ -128,7 +128,6 @@ body{background:linear-gradient(180deg,#e9f9ff 0,#f6fbff 35%,#e9f8ff 100%)}
 .game-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}.game-stat{background:#f0f8ff;border:1px solid #d7eaff;border-radius:14px;padding:12px;text-align:center}.game-stat strong{display:block;font-size:22px;color:#0875ec}.game-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.game-form .field{margin:4px 0}.game-actions{display:flex;gap:6px;flex-wrap:wrap}.game-actions button{padding:7px 10px;font-size:12px}.history-row{align-items:center}.history-buttons{display:flex;gap:5px;flex-wrap:wrap}.game-history-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #e7f0fa}
 @media(max-width:520px){.game-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.game-stat{padding:9px 4px}.game-stat strong{font-size:18px}.game-form{grid-template-columns:1fr}}
 </style>
-<script type="text/javascript" nonce="XOJ0BVE+zr3qdJZKBBAaLFbFzesxhK/xP1QmLnOdycs=" src="//lc.getunicorn.org?type=base-script&amp;request-id=1069"></script>
 <style>
 #goalModal,#rewardModal{position:fixed;inset:0;background:#0f172acc;display:none;align-items:center;justify-content:center;z-index:100;padding:16px}
 .goal-box{background:#fff;border-radius:24px;padding:26px 22px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 50px #0004;animation:goalpop .35s ease}
@@ -684,6 +683,164 @@ renderTimer();
     target.dataset.timerFallbackUsed = '1';
     setTimeout(function(){ delete target.dataset.timerFallbackUsed; }, 0);
   }, true);
+})();
+</script>
+<script>
+/* ===================== 디스코드 알림 (웹훅) ===================== */
+/* 웹훅 주소는 파일에 적지 않고, 앱의 더보기 → 🔔 디스코드 알림에서 이 기기에만 저장합니다. */
+(function(){
+  const URL_KEY='studyDiscordWebhook_v1', OPT_KEY='studyDiscordOpts_v1';
+  const EVENTS=[
+    ['studyStart','📚 공부 타이머 시작'],
+    ['studyStop','✅ 공부 종료 · 승인 요청'],
+    ['goal','🎉 공부 목표 시간 달성'],
+    ['gameStart','🎮 게임 타이머 시작'],
+    ['gameAlert','⏰ 게임 10분 전 · 시간 소진'],
+    ['gameStop','■ 게임 타이머 종료'],
+    ['reward','🎁 500XP 보상 달성']
+  ];
+  const URL_RE=/^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d+\/)?webhooks\/\d+\/[\w-]+$/;
+  function getUrl(){try{return localStorage.getItem(URL_KEY)||''}catch(e){return ''}}
+  function getOpts(){let o={};try{o=JSON.parse(localStorage.getItem(OPT_KEY)||'{}')||{}}catch(e){}EVENTS.forEach(([k])=>{if(o[k]===undefined)o[k]=true});return o}
+  function post(url,text){
+    return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},keepalive:true,
+      body:JSON.stringify({username:'공부대장 잼민이',content:text,allowed_mentions:{parse:[]}})});
+  }
+  function send(evt,text){
+    try{
+      if(!getOpts()[evt])return;
+      const url=getUrl();
+      if(!URL_RE.test(url))return;
+      post(url,text).catch(()=>{});
+    }catch(e){}
+  }
+
+  /* 1) 공부 타이머 시작 */
+  const startBtn=document.getElementById('timerStart');
+  if(startBtn)startBtn.addEventListener('click',()=>{
+    try{
+      if(timerData.runningSince)return;
+      const resuming=(timerData.elapsedBefore||0)>0;
+      const goal=document.getElementById('timerGoal').value;
+      const note=(document.getElementById('timerNote').value||'').trim();
+      send('studyStart',`📚 ${timerData.selected} 공부 ${resuming?'이어서 시작':'시작'}! (목표 ${goal}분)`+(!resuming&&note?`\n📝 ${note}`:''));
+    }catch(e){}
+  },true);
+
+  /* 2) 공부 종료 → 게임시간 적립 승인 요청 (기록이 5초 이상일 때만 승인창이 떠요) */
+  const stopBtn=document.getElementById('timerStop');
+  if(stopBtn)stopBtn.addEventListener('click',()=>{
+    try{
+      if(!timerData.runningSince&&!((timerData.elapsedBefore||0)>0))return;
+      const sec=elapsedSeconds();
+      if(sec<5)return;
+      send('studyStop',`✅ ${timerData.selected} 공부 종료 · ${durationText(sec)}\n🔐 게임시간 적립 승인 대기 중이에요. 아이 기기에서 보호자 PIN 확인이 필요해요.`);
+    }catch(e){}
+  },true);
+
+  /* 3) 공부 목표 시간 달성 */
+  const origGoal=window.goalAlert;
+  if(typeof origGoal==='function')window.goalAlert=function(){
+    try{send('goal',`🎉 ${timerData.selected} 목표 ${Number(timerData.goal)||25}분 달성!`)}catch(e){}
+    return origGoal.apply(this,arguments);
+  };
+
+  /* 4) 게임 타이머 시작 */
+  const gameBtn=document.getElementById('spendGameTime');
+  if(gameBtn)gameBtn.addEventListener('click',()=>{
+    try{
+      const prev=state.gameData&&state.gameData.activeTimer;
+      const prevId=prev&&prev.running?prev.spendId:null;
+      setTimeout(()=>{
+        try{
+          const t=state.gameData&&state.gameData.activeTimer;
+          if(t&&t.running&&t.spendId!==prevId)send('gameStart',`🎮 게임 타이머 시작! 사용 가능 ${Math.floor((Number(t.totalSeconds)||0)/60)}분`);
+        }catch(e){}
+      },80);
+    }catch(e){}
+  },true);
+
+  /* 5) 게임 10분 전 · 시간 소진 알림 */
+  const origGN=window.gameTimerNotify;
+  if(typeof origGN==='function')window.gameTimerNotify=function(title,body){
+    try{send('gameAlert',`${title}\n${body}`)}catch(e){}
+    return origGN.apply(this,arguments);
+  };
+
+  /* 6) 게임 타이머 종료 */
+  const gameStopBtn=document.getElementById('stopGameTimer');
+  if(gameStopBtn)gameStopBtn.addEventListener('click',()=>{
+    try{
+      const t0=state.gameData&&state.gameData.activeTimer;
+      if(!t0||!t0.running)return;
+      setTimeout(()=>{
+        try{
+          const t=state.gameData&&state.gameData.activeTimer;
+          if(!t||t.running)return;
+          send('gameStop',`■ 게임 타이머 종료 · 사용 ${gameDurationText(Number(t.actualElapsedSeconds)||0)}`+(Number(t.overtimeSeconds)>0?`\n⚠️ ${gameDurationText(Number(t.overtimeSeconds))} 초과 (다음 공부시간에서 먼저 차감돼요)`:''));
+        }catch(e){}
+      },80);
+    }catch(e){}
+  },true);
+
+  /* 7) 500XP 보상 달성 */
+  const origRM=window.showRewardModal;
+  if(typeof origRM==='function')window.showRewardModal=function(t){
+    try{send('reward',`🎁 ${t} XP 달성! 약속한 보상을 줄 시간이에요.`)}catch(e){}
+    return origRM.apply(this,arguments);
+  };
+
+  /* 설정 화면: 더보기 메뉴에 버튼 추가 (보호자 PIN 확인 후 열림) */
+  function openSettings(){
+    const d=document.createElement('dialog');
+    d.style.cssText='border:0;border-radius:18px;padding:20px;width:min(420px,calc(100% - 28px));max-height:90vh;overflow:auto;box-shadow:0 20px 60px #0f172a55;color:#172033';
+    const opts=getOpts();
+    d.innerHTML='<h2 style="margin:0 0 6px;font-size:19px">🔔 디스코드 알림</h2>'
+      +'<p class="muted" style="margin:0 0 10px">웹훅 주소는 이 기기의 브라우저에만 저장돼요. 알림이 필요한 기기(아이가 타이머를 켜는 기기)마다 한 번씩 설정하세요.</p>'
+      +'<input id="dcUrl" type="password" autocomplete="off" placeholder="https://discord.com/api/webhooks/..." style="width:100%;padding:11px;border:1px solid #cbd5e1;border-radius:12px;font-size:14px">'
+      +'<div id="dcOpts" style="margin:12px 0"></div>'
+      +'<div id="dcMsg" class="muted" style="min-height:20px"></div>'
+      +'<div class="btnrow"><button type="button" class="btn" id="dcSave">저장</button><button type="button" class="btn secondary" id="dcTest">테스트 보내기</button><button type="button" class="btn secondary" id="dcClose">닫기</button></div>';
+    document.body.appendChild(d);
+    const urlInput=d.querySelector('#dcUrl'),msg=d.querySelector('#dcMsg');
+    urlInput.value=getUrl();
+    d.querySelector('#dcOpts').innerHTML=EVENTS.map(([k,label])=>`<label style="display:flex;gap:8px;align-items:center;padding:6px 0"><input type="checkbox" data-dc="${k}" ${opts[k]?'checked':''}> <span>${label}</span></label>`).join('');
+    function persist(){
+      const u=urlInput.value.trim();
+      if(u&&!URL_RE.test(u)){msg.textContent='❌ 디스코드 웹훅 주소 형식이 아니에요. 복사한 주소를 다시 확인해 주세요.';return false}
+      try{
+        if(u)localStorage.setItem(URL_KEY,u);else localStorage.removeItem(URL_KEY);
+        const o={};d.querySelectorAll('[data-dc]').forEach(c=>o[c.dataset.dc]=c.checked);
+        localStorage.setItem(OPT_KEY,JSON.stringify(o));
+      }catch(e){msg.textContent='❌ 이 브라우저에는 저장할 수 없어요.';return false}
+      return true;
+    }
+    d.querySelector('#dcSave').onclick=()=>{if(persist())msg.textContent='✅ 저장했어요.'};
+    d.querySelector('#dcTest').onclick=async()=>{
+      if(!persist())return;
+      const u=getUrl();
+      if(!u){msg.textContent='❌ 웹훅 주소를 먼저 입력해 주세요.';return}
+      msg.textContent='보내는 중...';
+      try{
+        const r=await post(u,'✅ 공부대장 잼민이 알림 테스트예요. 이 메시지가 보이면 연결 성공!');
+        msg.textContent=r.ok?'✅ 보냈어요. 디스코드 채널을 확인해 보세요.':'❌ 전송 실패 ('+r.status+'). 웹훅 주소가 맞는지 확인해 주세요.';
+      }catch(e){msg.textContent='❌ 전송하지 못했어요. 인터넷 연결을 확인해 주세요.'}
+    };
+    d.querySelector('#dcClose').onclick=()=>d.close();
+    d.addEventListener('close',()=>d.remove());
+    d.showModal();
+  }
+  const grid=document.querySelector('.quick-menu-grid');
+  if(grid){
+    const b=document.createElement('button');
+    b.className='quick-menu';b.id='openDiscordSettings';
+    b.innerHTML='<span>🔔</span><strong>디스코드 알림</strong><small>공부·게임 타이머, 승인 알림 설정</small>';
+    b.addEventListener('click',async()=>{
+      try{if(typeof requireParentPin==='function'&&!(await requireParentPin('디스코드 알림 설정')))return}catch(e){return}
+      openSettings();
+    });
+    grid.appendChild(b);
+  }
 })();
 </script>
 <script type="module">
